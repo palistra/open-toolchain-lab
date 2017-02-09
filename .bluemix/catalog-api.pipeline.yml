@@ -4,23 +4,45 @@ stages:
   inputs:
   - type: git
     branch: master
-    service: ${ORDER_API_REPO}
+    service: ${CATALOG_API_REPO}
   triggers:
   - type: commit
   properties:
   - name: LOGICAL_APP_NAME
     value: ${CF_APP_NAME}
     type: text
-  - name: BUILD_PREFIX
+  - name: LOGICAL_ENV_NAME
     value: master
     type: text
-  - name: LOGICAL_ENV_NAME
+  - name: BUILD_PREFIX
     value: master
     type: text
   jobs:
   - name: Build
     type: builder
-    artifact_dir: ''
+  - name: Unit Tests
+    type: tester
+    APPLICATION_NAME: ${CF_APP_NAME}
+    ENVIRONMENT: master
+    LIFE_CYCLE_STAGE_SELECT: unittest
+    ADDITIONAL_LIFE_CYCLE_STAGE_SELECT: code
+    LOG_FILE: tests/server/mochatest.json
+    ADDITIONAL_LOG_FILE: tests/server/coverage/reports/coverage-summary.json
+    COMMAND: |-
+      #!/bin/bash
+      GRUNTFILE="tests/Gruntfile.js"
+      if [ -f $GRUNTFILE ]; then
+        npm install -g npm@3.7.2 ### work around default npm 2.1.1 instability
+        npm install
+        grunt dev-test-cov --no-color -f --gruntfile $GRUNTFILE --base .
+      else
+        echo "$GRUNTFILE not found."
+      fi
+  - name: Gate
+    type: tester
+    CRITERIA: Store Unit Test and Code Coverage Checks
+    APPLICATION_NAME: ${CF_APP_NAME}
+    ENVIRONMENT: master
 - name: DEV
   inputs:
   - type: job
@@ -35,11 +57,11 @@ stages:
   - name: APP_URL
     value: undefined
     type: text
-  - name: LOGICAL_ENV_NAME
-    value: ${DEV_SPACE_NAME}
-    type: text
   - name: LOGICAL_APP_NAME
     value: ${CF_APP_NAME}
+    type: text
+  - name: LOGICAL_ENV_NAME
+    value: ${DEV_SPACE_NAME}
     type: text
   - name: BUILD_PREFIX
     value: master
@@ -52,14 +74,33 @@ stages:
       organization: ${DEV_ORG_NAME}
       space: ${DEV_SPACE_NAME}
       application: ${CF_APP_NAME}
-    script: |-
+    script: |
       #!/bin/bash
       cf create-service cloudantNoSQLDB Lite myMicroservicesCloudant
       # Push app
       export CF_APP_NAME="dev-$CF_APP"
       cf push "${CF_APP_NAME}"
+      export APP_URL=http://$(cf app $CF_APP_NAME | grep urls: | awk '{print $2}')
       # View logs
       #cf logs "${CF_APP_NAME}" --recent
+  - name: Functional Tests
+    type: tester
+    APPLICATION_NAME: ${CF_APP_NAME}
+    ENVIRONMENT: ${DEV_SPACE_NAME}
+    LIFE_CYCLE_STAGE_SELECT: fvt
+    ADDITIONAL_LIFE_CYCLE_STAGE_SELECT: none
+    LOG_FILE: tests/fvt/mochafvttest.json
+    COMMAND: |-
+      #!/bin/bash
+      export CATALOG_API_TEST_SERVER=$APP_URL
+      GRUNTFILE="tests/Gruntfile.js"
+      if [ -f $GRUNTFILE ]; then
+        npm install -g npm@3.7.2 ### work around default npm 2.1.1 instability
+        npm install
+        grunt dev-fvt --no-color --gruntfile $GRUNTFILE --base .
+      else
+        echo "$GRUNTFILE not found."
+      fi
 - name: TEST
   inputs:
   - type: job
@@ -74,17 +115,20 @@ stages:
   - name: APP_URL
     value: undefined
     type: text
-  - name: PORT
-    value: '80'
-    type: text
   - name: LOGICAL_APP_NAME
     value: ${CF_APP_NAME}
+    type: text
+  - name: LOGICAL_ENV_NAME
+    value: ${QA_SPACE_NAME}
     type: text
   - name: BUILD_PREFIX
     value: master
     type: text
-  - name: LOGICAL_ENV_NAME
-    value: ${QA_SPACE_NAME}
+  - name: HOST
+    value: ondemand.saucelabs.com
+    type: text
+  - name: PORT
+    value: '80'
     type: text
   jobs:
   - name: Deploy
@@ -94,7 +138,7 @@ stages:
       organization: ${QA_ORG_NAME}
       space: ${QA_SPACE_NAME}
       application: ${CF_APP_NAME}
-    script: |-
+    script: |
       #!/bin/bash
       cf create-service cloudantNoSQLDB Lite myMicroservicesCloudant
       # Push app
@@ -107,7 +151,7 @@ stages:
     APPLICATION_NAME: ${CF_APP_NAME}
     LIFE_CYCLE_STAGE_SELECT: fvt
     ADDITIONAL_LIFE_CYCLE_STAGE_SELECT: none
-    LOG_FILE: ./xunit.xml
+    LOG_FILE: xunit.xml
     COMMAND: |-
       #!/bin/bash
       GRUNTFILE="tests/Gruntfile.js"
@@ -134,17 +178,14 @@ stages:
   - name: CF_APP_NAME
     value: undefined
     type: text
-  - name: APP_URL
-    value: undefined
-    type: text
-  - name: BUILD_PREFIX
-    value: master
-    type: text
   - name: LOGICAL_APP_NAME
     value: ${CF_APP_NAME}
     type: text
   - name: LOGICAL_ENV_NAME
     value: ${PROD_SPACE_NAME}
+    type: text
+  - name: BUILD_PREFIX
+    value: master
     type: text
   jobs:
   - name: Blue/Green Deploy
